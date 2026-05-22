@@ -196,13 +196,11 @@ JWT (JSON Web Tokens) security typically employs two layers of protection:
 
 This allows attackers who possess the public key to forge valid authentication tokens for any user, including administrators.
 
-**Finding the Public Key:**
-
-The server's public key is available at `/api/auth/jwks`. We can retrieve it using curl:
+The application leaks the JWT claims and session management through `/static/js/app.js`.
 
 ```
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
-└─$ curl -s http://principal.htb:8080/api/auth/jwks | jq
+└─$ curl -s http://principal.htb:8080/static/js/app.js | head -n 60
 /**
  * Principal Internal Platform - Client Application
  * Version: 1.2.0
@@ -241,32 +239,51 @@ const ROLES = {
 
 // Token management
 class TokenManager {
-    static getToken() {
-        return sessionStorage.getItem('auth_token');
-    }
-
-    static setToken(token) {
-        sessionStorage.setItem('auth_token', token);
-    }
-
-    static clearToken() {
-        sessionStorage.removeItem('auth_token');
-    }
-
-    static isAuthenticated() {
-        return !!this.getToken();
-    }
-
-    static getAuthHeaders() {
-        const token = this.getToken();
-        return token ? { 'Authorization': `Bearer ${token}` } : {};
-    }
+   
 }
 ```
 
-The application uses role-based access control with three privilege levels defined in JWT claims. The critical endpoint `/api/auth/jwks` exposes the server's public RSA key, which is necessary for the exploit.
+**Finding the Public Key:**
+
+The server's public key is available at `/api/auth/jwks`. We can retrieve it using curl
+
+```
+┌──(kali㉿kali)-[~/HTB/Linux/Principal]
+└─$ curl -s http://principal.htb:8080/api/auth/jwks | jq
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "e": "AQAB",
+      "kid": "enc-key-1",
+      "n": "lTh54vtBS1NAWrxAFU1NEZdrVxPeSMhHZ5NpZX-WtBsdWtJRaeeG61iNgYsFUXE9j2MAqmekpnyapD6A9dfSANhSgCF60uAZhnpIkFQVKEZday6ZIxoHpuP9zh2c3a7JrknrTbCPKzX39T6IK8pydccUvRl9zT4E_i6gtoVCUKixFVHnCvBpWJtmn4h3PCPCIOXtbZHAP3Nw7ncbXXNsrO3zmWXl-GQPuXu5-Uoi6mBQbmm0Z0SC07MCEZdFwoqQFC1E6OMN2G-KRwmuf661-uP9kPSXW8l4FutRpk6-LZW5C7gwihAiWyhZLQpjReRuhnUvLbG7I_m2PV0bWWy-Fw"
+    }
+  ]
+}
+```
+
+The application uses role-based access control with three privilege levels defined in JWT claims. 
+
+```
+const ROLES = {
+    ADMIN: 'ROLE_ADMIN',
+    MANAGER: 'ROLE_MANAGER',
+    USER: 'ROLE_USER'
+};
+```
 
 The application stores authentication tokens in browser session storage and transmits them via the `Authorization: Bearer` header for API requests.
+
+```
+static getToken() {
+  return sessionStorage.getItem('auth_token');
+}
+
+static getAuthHeaders() {
+  const token = this.getToken();
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
+```
 
 #### Exploiting CVE-2026-29000
 

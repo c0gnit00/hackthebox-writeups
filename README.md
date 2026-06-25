@@ -1,39 +1,25 @@
-# Chirpy Starter
+# C0gnit00 — HackTheBox Writeups & Pentest Techniques
 
-[![Gem Version](https://img.shields.io/gem/v/jekyll-theme-chirpy)][gem]&nbsp;
-[![GitHub license](https://img.shields.io/github/license/cotes2020/chirpy-starter.svg?color=blue)][mit]
+A personal blog documenting HackTheBox machine writeups, CTF solutions, and penetration testing techniques.
 
-A minimal, ready-to-use template for creating a blog with the [**Chirpy**][chirpy] Jekyll theme. Get up and running in minutes with all critical files pre-configured.
+🌐 **Live Site:** [c0gnit00.github.io/HTB](https://c0gnit00.github.io/HTB/)
 
-## Why This Starter Exists
+## About
 
-When installing Chirpy through [RubyGems.org][gem], Jekyll can only read a subset of theme files (`_data`, `_layouts`, `_includes`, `_sass`, `assets`) and limited `_config.yml` options from the gem. As a result, users cannot enjoy the full out-of-the-box experience that Chirpy offers.
+This site contains detailed walkthroughs for HackTheBox machines and challenges, covering a range of difficulty levels and attack vectors. Each writeup breaks down the enumeration, exploitation, and privilege escalation steps used to root the machine.
 
-To unlock all features, the following files must be present in your Jekyll site:
+Topics covered include:
 
-```shell
-.
-├── _config.yml
-├── _plugins
-├── _tabs
-└── index.html
-```
+- HackTheBox machine writeups (Linux & Windows)
+- Common CVEs and vulnerability exploitation
+- Post-exploitation and privilege escalation techniques
 
-This starter bundles those files from the latest **Chirpy** release along with a [CD][CD] workflow, so you can start writing immediately.
+## Built With
 
-## Usage
-
-Check out the [theme's docs](https://github.com/cotes2020/jekyll-theme-chirpy/wiki).
-
-## Contributing
-
-This repository is automatically updated with new releases from the theme repository. If you encounter any issues or want to contribute to its improvement, please visit the [theme repository][chirpy] to provide feedback.
+- [Jekyll](https://jekyllrb.com/) — static site generator
+- [Chirpy Theme](https://github.com/cotes2020/jekyll-theme-chirpy) — Jekyll theme
+- GitHub Pages — hosting & CI/CD
 
 ## License
 
-This work is published under [MIT][mit] License.
-
-[gem]: https://rubygems.org/gems/jekyll-theme-chirpy
-[chirpy]: https://github.com/cotes2020/jekyll-theme-chirpy/
-[CD]: https://en.wikipedia.org/wiki/Continuous_deployment
-[mit]: https://github.com/cotes2020/chirpy-starter/blob/master/LICENSE
+This work is published under the [MIT](./LICENSE) License.

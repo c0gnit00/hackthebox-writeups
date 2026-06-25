@@ -11,7 +11,16 @@ image:
 
 ## Executive Summary
 
-The **Interpreter** machine is a Debian 12.7-based system running Mirth Connect 4.4.0 (a healthcare integration platform) vulnerable to CVE-2023-43208, a critical deserialization remote code execution vulnerability. Through this vulnerability, we gain initial access as the `mirth` user. By enumerating the local MariaDB database, we extract a password hash, crack it, and escalate to the `sedric` user via SSH. Finally, privilege escalation to root is achieved through a Flask-based notification service running as root that contains an unsafe `eval()` vulnerability in its f-string templating logic.
+This comprehensive writeup details the complete exploitation of the **Interpreter** machine. The attack chain targets severe vulnerabilities in both a public-facing healthcare integration platform and an insecure internal python service, culminating in full system compromise.
+
+**Attack Chain Summary:**
+
+1. **Unauthenticated RCE (Initial Access):** Enumeration identified the Mirth Connect application running on the target. The application was vulnerable to **CVE-2023-43208**, a critical unauthenticated insecure deserialization flaw via the XStream library. By submitting a malicious XML gadget chain payload, Remote Code Execution was achieved, granting a reverse shell as the `mirth` user.
+2. **Credential Extraction & Cracking:** Post-exploitation enumeration revealed a locally running MariaDB instance containing Mirth Connect configuration databases. The `PERSON_PASSWORD` table was queried to extract a base64-encoded PBKDF2-HMAC-SHA256 password hash. The hash was reformatted for Hashcat and cracked offline, revealing the password `snowflake1`.
+3. **Lateral Movement:** The cracked password was successfully reused to establish an SSH session as the system user `sedric`.
+4. **Privilege Escalation to Root:** Further enumeration uncovered a custom internal Python Flask application (`notif.py`) listening on localhost port 54321 and running as `root`. Code review identified a critical Server-Side Template Injection (SSTI) vulnerability where user input was unsafely passed into an `eval(f"...")` statement. A crafted XML payload containing a Python os command execution payload was submitted to the application, executing the command and extracting the root flag.
+
+**Impact:** Complete system compromise. An unauthenticated remote attacker can achieve code execution on the server and chain internal configuration flaws to gain full administrative root access.
 
 ---
 
@@ -46,8 +55,6 @@ PORT     STATE SERVICE  VERSION
 6661/tcp open  unknown
 Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
 ```
-
-### Service Identification
 
 The OpenSSH banner reveals the target is running [Debian 12.7](https://www.debian.org/News/2024/20240831), released on August 31, 2024. The critical findings from the scan:
 
@@ -363,8 +370,6 @@ The Metasploit exploit constructs a malicious XML payload using the following ga
 
 ---
 
-
-
 ## Post-Exploitation & Database Enumeration
 
 ### Service Enumeration
@@ -472,6 +477,7 @@ server.includecustomlib = true
 
 administrator.maxheapsize = 512m
 
+---
 configurationmap.path = ${dir.appdata}/configuration.properties
 
 rhino.languageversion = es6
@@ -735,7 +741,6 @@ sedric      4396  0.0  0.0   6340  2004 pts/1    S+   09:29   0:00 grep python3
 
 Reading the notification service code:
 
-
 {% raw %}
 ```python
 #!/usr/bin/env python3
@@ -803,11 +808,13 @@ if __name__=="__main__":
 
 The `template()` function contains a classic **Server-Side Template Injection (SSTI)** vulnerability combined with unsafe `eval()`:
 
+{% raw %}
 ```python
 template = f"Patient {first} {last} ({gender}), {datetime.now().year - year_of_birth} years old, received from {sender} at {ts}"
 try:
     return eval(f"f'''{template}'''")
 ```
+{% endraw %}
 
 **Attack Flow**:
 
@@ -858,29 +865,61 @@ print(r.urlopen(req).read().decode())
 
 ### Executing the Exploit
 
+Got the root flag
+
 ```shell
 sedric@interpreter:/tmp$ python3 exploit.py 
 Patient **************4eb05605a861c40db
  Doe (M), 36 years old, received from App1 at 2025
 ```
 
-**Root flag successfully obtained!**
+---
+
+## Mitigations & Recommendations
+
+### 1. Update Mirth Connect (Remediate CVE-2023-43208)
+
+**Action:** Upgrade Mirth Connect to version 4.4.1 or later to patch the critical insecure deserialization vulnerability.
+
+```bash
+# Verify the installed Mirth Connect version
+grep -i "version" /usr/local/mirthconnect/conf/mirth.properties
+
+# Upgrade to a secure version (>= 4.4.1) using the official installer to enforce a strict class allowlist
+```
+
+**Root Cause:** Mirth Connect versions prior to 4.4.1 implemented a flawed "denylist" approach to restrict the Java classes processed by the XStream XML unmarshaller. Attackers bypassed this denylist by leveraging alternative classes from the Apache Commons Collections library to construct a gadget chain, achieving unauthenticated Remote Code Execution during the XML payload processing phase, which occurred prior to authentication validation.
 
 ---
 
-## Summary
+### 2. Enforce Strong Password Policies
 
-| Stage | Method | Credentials/Exploit | Result |
-|-------|--------|-------------------|--------|
-| Initial Access | CVE-2023-43208 (Java Deserialization RCE) | Mirth Connect 4.4.0 | Shell as `mirth` user |
-| Database Enumeration | Configuration file reading + SQL queries | mirthdb:MirthPass123! | Password hash extracted |
-| Hash Cracking | PBKDF2-HMAC-SHA256 (600K iterations) | Hashcat mode 10900 | Password: `snowflake1` |
-| Lateral Movement | SSH authentication | sedric:snowflake1 | Shell as `sedric` user |
-| Privilege Escalation | SSTI + eval() injection in Flask app | Unsafe Python eval() | RCE as `root` user |
+**Action:** Implement a robust password policy that enforces the use of long, complex passwords for all system users and internal application accounts to prevent offline dictionary attacks.
 
-**Key Lessons**:
-1. Never deserialize untrusted data in Java applications
-2. Avoid using `eval()` on user-controlled input, even with basic regex validation
-3. Extract and crack password hashes from databases when accessible
-4. Enumerate all local services - even localhost-only services may be exploitable from compromised user accounts
-5. Implement proper input sanitization beyond simple regex patterns
+```bash
+# Enforce strong passwords via PAM on Debian/Ubuntu
+apt-get install libpam-pwquality
+echo "password requisite pam_pwquality.so retry=3 minlen=12 dcredit=-1 ucredit=-1 ocredit=-1" >> /etc/pam.d/common-password
+```
+
+**Root Cause:** The `sedric` user's password (`snowflake1`) was weak and commonly found in standard dictionary lists (like `rockyou.txt`). This weakness allowed an attacker who obtained the database hash to crack it efficiently and subsequently pivot to a higher-privileged system shell via SSH.
+
+---
+
+### 3. Remove Unsafe Evaluation in Python Flask Application
+
+**Action:** Refactor the `notif.py` script to use parameterized strings or standard string formatting instead of dynamically evaluating f-strings with user input via the highly dangerous `eval()` function.
+
+```python
+# Secure string formatting without eval()
+import datetime
+
+def template_secure(first, last, sender, ts, dob, gender):
+    year_of_birth = int(dob.split('/')[-1])
+    age = datetime.datetime.now().year - year_of_birth
+    
+    # Safely format string without evaluating python expressions inside variables
+    return f"Patient {first} {last} ({gender}), {age} years old, received from {sender} at {ts}"
+```
+
+**Root Cause:** The local Flask application (`notif.py`) dynamically constructed an f-string template concatenating unsanitized user inputs, and then explicitly passed that template to Python's `eval()` function (`eval(f"f'''{template}'''")`). Furthermore, the input validation regex (`^[a-zA-Z0-9._'\"(){}=+/]+$`) explicitly permitted curly braces `{}`, enabling Server-Side Template Injection (SSTI) and arbitrary Python code execution as `root`.

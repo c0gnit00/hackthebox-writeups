@@ -2,7 +2,7 @@
 
 A personal blog documenting HackTheBox machine writeups, CTF solutions, and penetration testing techniques.
 
-🌐 **Live Site:** [c0gnit00.github.io/HTB](https://c0gnit00.github.io/HTB/)
+🌐 **Live Site:** [c0gnit00.github.io/HTB](https://c0gnit00.github.io/hackthebox-writeups/)
 
 ## About
 

@@ -2,7 +2,7 @@
 title: "TombWatcher"
 date: 2025-10-11 00:00:00 +0500
 categories: [HackTheBox, Windows]
-tags: [ADCS-ESC15, Active-Directory, CVE-2024-49019, Certipy, DACL-Abuse, Kerberoasting, Tombstoned-Object-Recovery, gMSA]
+tags: [ADCS-ESC15, Active-Directory, CVE-2024-49019, Certipy, DACL-Abuse, Kerberoasting, Tombstoned-Object-Recovery, GMSA]
 description: Writeup for HackTheBox TombWatcher machine
 image:
   path: assets/img/tombwatcher/tombwatcher.png

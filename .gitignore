@@ -1,6 +1,7 @@
 # Bundler cache
 .bundle
 vendor
+vendor/bundle/
 Gemfile.lock
 
 # Jekyll cache
@@ -25,3 +26,4 @@ package-lock.json
 # Misc
 _sass/vendors
 assets/js/dist
+
